@@ -26,15 +26,17 @@ class FontGenerator
     private readonly string fontName;
     private readonly string displayName;
     private readonly FontVersion fontVersion;
+    private readonly UndertaleData utData;
     PrivateFontCollection fontCollection = new PrivateFontCollection();
 
-    public FontGenerator(string trueTypeFontPath, string fontName, string displayName, float emSize, FontStyle fontStyle, FontVersion fontVersion)
+    public FontGenerator(string trueTypeFontPath, string fontName, string displayName, float emSize, FontStyle fontStyle, FontVersion fontVersion, UndertaleData data)
     {
         this.fontCollection.AddFontFile(trueTypeFontPath);
         this.font = new Font(fontCollection.Families[0], emSize, fontStyle);
         this.fontName = fontName;
         this.displayName = displayName;
         this.fontVersion = fontVersion;
+        this.utData = data;
     }
 
     public Bitmap RenderSampleString(string s)
@@ -57,8 +59,8 @@ class FontGenerator
         chars = chars.Distinct().OrderBy(c => c).ToList();
 
         var utFont = new UndertaleModLib.Models.UndertaleFont();
-        utFont.Name = new UndertaleModLib.Models.UndertaleString(fontName);
-        utFont.DisplayName = new UndertaleModLib.Models.UndertaleString(displayName);
+        utFont.Name = utData.Strings.MakeString(fontName);
+        utFont.DisplayName = utData.Strings.MakeString(displayName);
         utFont.ScaleX = 1;
         utFont.ScaleY = 1;
         utFont.Charset = 1;
@@ -135,7 +137,7 @@ class FontGenerator
         }
 
         var embedTexture = new UndertaleModLib.Models.UndertaleEmbeddedTexture();
-        embedTexture.Name = new UndertaleModLib.Models.UndertaleString("Texture " + fontName);
+        embedTexture.Name = utData.Strings.MakeString("Texture " + fontName);
         using (var ms = new MemoryStream())
         {
             textureBmp.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
@@ -143,7 +145,7 @@ class FontGenerator
         }
 
         var texturePage = new UndertaleModLib.Models.UndertaleTexturePageItem();
-        texturePage.Name = new UndertaleModLib.Models.UndertaleString("PageItem " + fontName);
+        texturePage.Name = utData.Strings.MakeString("PageItem " + fontName);
         texturePage.TexturePage = embedTexture;
         texturePage.SourceX = 0;
         texturePage.SourceY = 0;
@@ -223,7 +225,7 @@ public partial class FontGeneratorWindow : Form
 
     private void inputFilePathsChanged(object sender, EventArgs e)
     {
-        if (File.Exists(tbCharsetPath.Text)&& File.Exists(tbTtfPath.Text))
+        if (File.Exists(tbCharsetPath.Text) && File.Exists(tbTtfPath.Text))
         {
             saveToolStripMenuItem.Enabled = true;
         }
@@ -235,17 +237,7 @@ public partial class FontGeneratorWindow : Form
         {
             try
             {
-                FontStyle fontStyle = ParseFontStyle();
-                FontGenerator.FontVersion fontVersion = ParseFontVersion();
-
-                fontGenerator = new FontGenerator(
-                    tbTtfPath.Text,
-                    tbFontName.Text,
-                    tbFontDispName.Text,
-                    Convert.ToSingle(nudFontSize.Value),
-                    fontStyle,
-                    fontVersion
-                    );
+                fontGenerator = CreateFontGenerator();
                 pbPreview.Image = fontGenerator.RenderSampleString(tbPreviewText.Text);
             }
             catch (Exception ex)
@@ -254,6 +246,22 @@ public partial class FontGeneratorWindow : Form
                 Console.WriteLine(ex.StackTrace);
             }
         }
+    }
+
+    private FontGenerator CreateFontGenerator()
+    {
+        FontStyle fontStyle = ParseFontStyle();
+        FontGenerator.FontVersion fontVersion = ParseFontVersion();
+
+        return new FontGenerator(
+            tbTtfPath.Text,
+            tbFontName.Text,
+            tbFontDispName.Text,
+            Convert.ToSingle(nudFontSize.Value),
+            fontStyle,
+            fontVersion,
+            utData
+            );
     }
 
     private FontGenerator.FontVersion ParseFontVersion()
@@ -295,9 +303,10 @@ public partial class FontGeneratorWindow : Form
 
     private void SaveFont()
     {
-        if (fontGenerator != null && File.Exists(tbCharsetPath.Text))
+        if (File.Exists(tbCharsetPath.Text) && File.Exists(tbTtfPath.Text))
         {
             var charset = File.ReadAllText(tbCharsetPath.Text);
+            fontGenerator = CreateFontGenerator();
             var font = fontGenerator.GenerateFont(charset.ToList());
 
             if (!SaveResource(font))
@@ -305,10 +314,6 @@ public partial class FontGeneratorWindow : Form
 
             SaveResource(font.Texture);
             SaveResource(font.Texture.TexturePage);
-            SaveResource(font.Name);
-            SaveResource(font.DisplayName);
-            SaveResource(font.Texture.Name);
-            SaveResource(font.Texture.TexturePage.Name);
         }
     }
 
@@ -341,7 +346,8 @@ public partial class FontGeneratorWindow : Form
         });
         if (index != -1)
         {
-            var resName = res is UndertaleNamedResource ? ((UndertaleNamedResource)res).Name.ToString() : "resource";
+            var resName = res is UndertaleNamedResource ? ((UndertaleNamedResource)res).Name.ToString() :
+             res is UndertaleString ? ((UndertaleString)res).ToString() : "resource";
             var result = MessageBox.Show($"A {utTypeSuffix} {resName} is already exists.\nDo you want to replace it?", "Warning", MessageBoxButtons.YesNo);
             if (result == DialogResult.No)
                 return false;
