@@ -11,7 +11,7 @@ using System.Windows.Forms;
 using UndertaleModLib.Util;
 
 EnsureDataLoaded();
-new FontPropertiesWindow(Data).ShowDialog();
+new FontGeneratorWindow(Data).ShowDialog();
 
 
 class FontGenerator
@@ -100,6 +100,7 @@ class FontGenerator
         gfx.FillRectangle(blackBrush, new Rectangle(0, 0, textureBmp.Width, textureBmp.Height));
 
         int x = 0, y = 0;
+        int maxHeight = 0;
         foreach (char c in chars)
         {
             var glyph = new UndertaleModLib.Models.UndertaleFont.Glyph();
@@ -108,10 +109,12 @@ class FontGenerator
             glyph.Character = c;
 
             var charSize = gfx.MeasureString(new string(c, 1), font);
+            maxHeight = Math.Max(maxHeight, Convert.ToInt32(charSize.Height));
             if (x + charSize.Width > textureBmp.Width)
             {
                 x = 0;
-                y += Convert.ToInt32(regularFontSize.Height);
+                y += Convert.ToInt32(maxHeight);
+                maxHeight = 0;
             }
 
             gfx.DrawString(new string(c, 1), font, whiteBrush, new Point(x, y));
@@ -124,6 +127,12 @@ class FontGenerator
             x += Convert.ToInt32(charSize.Width);
         }
         gfx.Flush();
+
+        var textureHeight = Nlpo2(y + maxHeight);
+        if (textureHeight < textureBmp.Height)
+        {
+            textureBmp = textureBmp.Clone(new Rectangle(0, 0, textureBmp.Width, textureHeight), textureBmp.PixelFormat);
+        }
 
         var embedTexture = new UndertaleModLib.Models.UndertaleEmbeddedTexture();
         embedTexture.Name = new UndertaleModLib.Models.UndertaleString("Texture " + fontName);
@@ -162,17 +171,15 @@ class FontGenerator
     }
 }
 
-
-#region FontPropertiesWindow.cs
-
-public partial class FontPropertiesWindow : Form
+#region FontGeneratorWindow.cs
+public partial class FontGeneratorWindow : Form
 {
     private FontGenerator fontGenerator;
-    private UndertaleData Data;
+    private UndertaleData utData;
 
-    public FontPropertiesWindow(UndertaleData data)
+    public FontGeneratorWindow(UndertaleData data)
     {
-        this.Data = data;
+        this.utData = data;
         InitializeComponent();
     }
 
@@ -212,6 +219,14 @@ public partial class FontPropertiesWindow : Form
     private void fontPropertiesChanged(object sender, EventArgs e)
     {
         RenderSample();
+    }
+
+    private void inputFilePathsChanged(object sender, EventArgs e)
+    {
+        if (File.Exists(tbCharsetPath.Text)&& File.Exists(tbTtfPath.Text))
+        {
+            saveToolStripMenuItem.Enabled = true;
+        }
     }
 
     private void RenderSample()
@@ -285,23 +300,57 @@ public partial class FontPropertiesWindow : Form
             var charset = File.ReadAllText(tbCharsetPath.Text);
             var font = fontGenerator.GenerateFont(charset.ToList());
 
-            var existingFont = Data.ByName(font.Name.Content);
-            if (existingFont != null)
-            {
-                var result = MessageBox.Show($"A font with name {font.Name} is already exists.\nDo you want to replace it?", "Warning", MessageBoxButtons.YesNo);
-                if (result == DialogResult.No)
-                    return;
-                Data.Fonts.Remove((UndertaleFont)existingFont);
-            }
+            if (!SaveResource(font))
+                return;
 
-            Data.Fonts.Add(font);
-            Data.TexturePageItems.Add(font.Texture);
-            Data.EmbeddedTextures.Add(font.Texture.TexturePage);
-            Data.Strings.Add(font.Name);
-            Data.Strings.Add(font.Texture.Name);
-            Data.Strings.Add(font.Texture.TexturePage.Name);
+            SaveResource(font.Texture);
+            SaveResource(font.Texture.TexturePage);
+            SaveResource(font.Name);
+            SaveResource(font.DisplayName);
+            SaveResource(font.Texture.Name);
+            SaveResource(font.Texture.TexturePage.Name);
         }
     }
+
+    private bool SaveResource(UndertaleResource res)
+    {
+        Type resType = res.GetType();
+        string utTypeSuffix = resType.Name.Remove(0, "Undertale".Length);
+
+        var property = utData.GetType().GetProperties().Where(x => x.PropertyType.Name == "IList`1")
+                                                .FirstOrDefault(x => x.PropertyType.GetGenericArguments()[0] == resType);
+        if (property is null)
+            throw new MissingMemberException($"\"UndertaleData\" doesn't contain a resource list of type \"{resType.FullName}\".");
+
+        System.Collections.IList resList = property.GetValue(utData, null) as System.Collections.IList;
+
+        var index = resList.Cast<UndertaleResource>().ToList().FindIndex(r =>
+        {
+            if (r is UndertaleNamedResource namedRes)
+            {
+                return namedRes.Name.Content == ((UndertaleNamedResource)res).Name.Content;
+            }
+            else if (r is UndertaleModLib.Models.UndertaleString utString)
+            {
+                return utString.Content == ((UndertaleModLib.Models.UndertaleString)res).Content;
+            }
+            else
+            {
+                throw new NotSupportedException();
+            }
+        });
+        if (index != -1)
+        {
+            var resName = res is UndertaleNamedResource ? ((UndertaleNamedResource)res).Name.ToString() : "resource";
+            var result = MessageBox.Show($"A {utTypeSuffix} {resName} is already exists.\nDo you want to replace it?", "Warning", MessageBoxButtons.YesNo);
+            if (result == DialogResult.No)
+                return false;
+            resList.RemoveAt(index);
+        }
+        resList.Add(res);
+        return true;
+    }
+
 
     private void DefaultFontProperties()
     {
@@ -317,13 +366,16 @@ public partial class FontPropertiesWindow : Form
         gbFontProperties.Enabled = true;
         tbPreviewText.Enabled = true;
     }
-}
 
+    private void FontPropertiesWindow_Load(object sender, EventArgs e)
+    {
+        NewFont();
+    }
+}
 #endregion
 
-#region FontPropertiesWindow.Designer.cs
-
-partial class FontPropertiesWindow
+#region FontGeneratorWindow.Designer.cs
+partial class FontGeneratorWindow
 {
     /// <summary>
     ///  Required designer variable.
@@ -352,6 +404,8 @@ partial class FontPropertiesWindow
     private void InitializeComponent()
     {
         this.gbFontProperties = new System.Windows.Forms.GroupBox();
+        this.tbCharsetPath = new System.Windows.Forms.TextBox();
+        this.label1 = new System.Windows.Forms.Label();
         this.btnChooseTtf = new System.Windows.Forms.Button();
         this.btnChooseCharset = new System.Windows.Forms.Button();
         this.cbFontVer = new System.Windows.Forms.ComboBox();
@@ -373,8 +427,6 @@ partial class FontPropertiesWindow
         this.saveToolStripMenuItem = new System.Windows.Forms.ToolStripMenuItem();
         this.menuStrip1 = new System.Windows.Forms.MenuStrip();
         this.tbPreviewText = new System.Windows.Forms.TextBox();
-        this.tbCharsetPath = new System.Windows.Forms.TextBox();
-        this.label1 = new System.Windows.Forms.Label();
         this.gbFontProperties.SuspendLayout();
         ((System.ComponentModel.ISupportInitialize)(this.nudFontSize)).BeginInit();
         ((System.ComponentModel.ISupportInitialize)(this.pbPreview)).BeginInit();
@@ -403,25 +455,50 @@ partial class FontPropertiesWindow
         this.gbFontProperties.Controls.Add(this.tbTtfPath);
         this.gbFontProperties.Controls.Add(this.lblTtfPath);
         this.gbFontProperties.Enabled = false;
-        this.gbFontProperties.Location = new System.Drawing.Point(19, 40);
-        this.gbFontProperties.Margin = new System.Windows.Forms.Padding(5, 4, 5, 4);
+        this.gbFontProperties.Location = new System.Drawing.Point(12, 28);
         this.gbFontProperties.Name = "gbFontProperties";
-        this.gbFontProperties.Padding = new System.Windows.Forms.Padding(5, 4, 5, 4);
-        this.gbFontProperties.Size = new System.Drawing.Size(759, 354);
+        this.gbFontProperties.Size = new System.Drawing.Size(483, 251);
         this.gbFontProperties.TabIndex = 1;
         this.gbFontProperties.TabStop = false;
         this.gbFontProperties.Text = "Properties";
         // 
+        // tbCharsetPath
+        // 
+        this.tbCharsetPath.Location = new System.Drawing.Point(6, 222);
+        this.tbCharsetPath.MaxLength = 256;
+        this.tbCharsetPath.Name = "tbCharsetPath";
+        this.tbCharsetPath.Size = new System.Drawing.Size(310, 23);
+        this.tbCharsetPath.TabIndex = 14;
+        this.tbCharsetPath.TextChanged += new System.EventHandler(this.inputFilePathsChanged);
+        // 
+        // label1
+        // 
+        this.label1.AutoSize = true;
+        this.label1.Location = new System.Drawing.Point(6, 202);
+        this.label1.Name = "label1";
+        this.label1.Size = new System.Drawing.Size(85, 17);
+        this.label1.TabIndex = 13;
+        this.label1.Text = "Charset path:";
+        // 
         // btnChooseTtf
         // 
-        this.btnChooseTtf.Location = new System.Drawing.Point(101, 40);
-        this.btnChooseTtf.Margin = new System.Windows.Forms.Padding(5, 4, 5, 4);
+        this.btnChooseTtf.Location = new System.Drawing.Point(64, 28);
         this.btnChooseTtf.Name = "btnChooseTtf";
-        this.btnChooseTtf.Size = new System.Drawing.Size(118, 32);
+        this.btnChooseTtf.Size = new System.Drawing.Size(75, 23);
         this.btnChooseTtf.TabIndex = 12;
         this.btnChooseTtf.Text = "Choose";
         this.btnChooseTtf.UseVisualStyleBackColor = true;
         this.btnChooseTtf.Click += new System.EventHandler(this.btnChooseTtf_Click);
+        // 
+        // btnChooseCharset
+        // 
+        this.btnChooseCharset.Location = new System.Drawing.Point(97, 199);
+        this.btnChooseCharset.Name = "btnChooseCharset";
+        this.btnChooseCharset.Size = new System.Drawing.Size(75, 23);
+        this.btnChooseCharset.TabIndex = 12;
+        this.btnChooseCharset.Text = "Choose";
+        this.btnChooseCharset.UseVisualStyleBackColor = true;
+        this.btnChooseCharset.Click += new System.EventHandler(this.btnChooseCharset_Click);
         // 
         // cbFontVer
         // 
@@ -430,19 +507,17 @@ partial class FontPropertiesWindow
         this.cbFontVer.Items.AddRange(new object[] {
             "Orign",
             "2.3 and above"});
-        this.cbFontVer.Location = new System.Drawing.Point(522, 233);
-        this.cbFontVer.Margin = new System.Windows.Forms.Padding(5, 4, 5, 4);
+        this.cbFontVer.Location = new System.Drawing.Point(332, 165);
         this.cbFontVer.Name = "cbFontVer";
-        this.cbFontVer.Size = new System.Drawing.Size(226, 32);
+        this.cbFontVer.Size = new System.Drawing.Size(145, 25);
         this.cbFontVer.TabIndex = 11;
         // 
         // lblFontVer
         // 
         this.lblFontVer.AutoSize = true;
-        this.lblFontVer.Location = new System.Drawing.Point(522, 205);
-        this.lblFontVer.Margin = new System.Windows.Forms.Padding(5, 0, 5, 0);
+        this.lblFontVer.Location = new System.Drawing.Point(332, 145);
         this.lblFontVer.Name = "lblFontVer";
-        this.lblFontVer.Size = new System.Drawing.Size(119, 24);
+        this.lblFontVer.Size = new System.Drawing.Size(82, 17);
         this.lblFontVer.TabIndex = 10;
         this.lblFontVer.Text = "Font version:";
         // 
@@ -455,20 +530,18 @@ partial class FontPropertiesWindow
             "Italic",
             "Bold",
             "ItalicBold"});
-        this.cbFontStyle.Location = new System.Drawing.Point(522, 154);
-        this.cbFontStyle.Margin = new System.Windows.Forms.Padding(5, 4, 5, 4);
+        this.cbFontStyle.Location = new System.Drawing.Point(332, 109);
         this.cbFontStyle.Name = "cbFontStyle";
-        this.cbFontStyle.Size = new System.Drawing.Size(226, 32);
+        this.cbFontStyle.Size = new System.Drawing.Size(145, 25);
         this.cbFontStyle.TabIndex = 9;
         this.cbFontStyle.SelectedIndexChanged += new System.EventHandler(this.fontPropertiesChanged);
         // 
         // lblFontStyle
         // 
         this.lblFontStyle.AutoSize = true;
-        this.lblFontStyle.Location = new System.Drawing.Point(522, 126);
-        this.lblFontStyle.Margin = new System.Windows.Forms.Padding(5, 0, 5, 0);
+        this.lblFontStyle.Location = new System.Drawing.Point(332, 89);
         this.lblFontStyle.Name = "lblFontStyle";
-        this.lblFontStyle.Size = new System.Drawing.Size(98, 24);
+        this.lblFontStyle.Size = new System.Drawing.Size(66, 17);
         this.lblFontStyle.TabIndex = 8;
         this.lblFontStyle.Text = "Font style:";
         // 
@@ -480,77 +553,71 @@ partial class FontPropertiesWindow
             0,
             0,
             65536});
-        this.nudFontSize.Location = new System.Drawing.Point(522, 73);
-        this.nudFontSize.Margin = new System.Windows.Forms.Padding(5, 4, 5, 4);
+        this.nudFontSize.Location = new System.Drawing.Point(332, 52);
         this.nudFontSize.Name = "nudFontSize";
-        this.nudFontSize.Size = new System.Drawing.Size(228, 30);
+        this.nudFontSize.Size = new System.Drawing.Size(145, 23);
         this.nudFontSize.TabIndex = 7;
+        this.nudFontSize.Maximum = 1000;
         this.nudFontSize.ValueChanged += new System.EventHandler(this.fontPropertiesChanged);
         // 
         // lblFontSize
         // 
         this.lblFontSize.AutoSize = true;
-        this.lblFontSize.Location = new System.Drawing.Point(522, 44);
-        this.lblFontSize.Margin = new System.Windows.Forms.Padding(5, 0, 5, 0);
+        this.lblFontSize.Location = new System.Drawing.Point(332, 31);
         this.lblFontSize.Name = "lblFontSize";
-        this.lblFontSize.Size = new System.Drawing.Size(90, 24);
+        this.lblFontSize.Size = new System.Drawing.Size(62, 17);
         this.lblFontSize.TabIndex = 6;
         this.lblFontSize.Text = "Font size:";
         // 
         // tbFontDispName
         // 
-        this.tbFontDispName.Location = new System.Drawing.Point(9, 233);
-        this.tbFontDispName.Margin = new System.Windows.Forms.Padding(5, 4, 5, 4);
+        this.tbFontDispName.Location = new System.Drawing.Point(6, 165);
         this.tbFontDispName.MaxLength = 256;
         this.tbFontDispName.Name = "tbFontDispName";
-        this.tbFontDispName.Size = new System.Drawing.Size(485, 30);
+        this.tbFontDispName.Size = new System.Drawing.Size(310, 23);
         this.tbFontDispName.TabIndex = 5;
         // 
         // lblFontDispName
         // 
         this.lblFontDispName.AutoSize = true;
-        this.lblFontDispName.Location = new System.Drawing.Point(9, 205);
-        this.lblFontDispName.Margin = new System.Windows.Forms.Padding(5, 0, 5, 0);
+        this.lblFontDispName.Location = new System.Drawing.Point(6, 145);
         this.lblFontDispName.Name = "lblFontDispName";
-        this.lblFontDispName.Size = new System.Drawing.Size(131, 24);
+        this.lblFontDispName.Size = new System.Drawing.Size(89, 17);
         this.lblFontDispName.TabIndex = 4;
         this.lblFontDispName.Text = "Display name:";
         // 
         // tbFontName
         // 
-        this.tbFontName.Location = new System.Drawing.Point(9, 154);
-        this.tbFontName.Margin = new System.Windows.Forms.Padding(5, 4, 5, 4);
+        this.tbFontName.Location = new System.Drawing.Point(6, 109);
         this.tbFontName.MaxLength = 256;
         this.tbFontName.Name = "tbFontName";
-        this.tbFontName.Size = new System.Drawing.Size(485, 30);
+        this.tbFontName.Size = new System.Drawing.Size(310, 23);
         this.tbFontName.TabIndex = 3;
         // 
         // lblFontName
         // 
         this.lblFontName.AutoSize = true;
-        this.lblFontName.Location = new System.Drawing.Point(9, 126);
-        this.lblFontName.Margin = new System.Windows.Forms.Padding(5, 0, 5, 0);
+        this.lblFontName.Location = new System.Drawing.Point(6, 89);
         this.lblFontName.Name = "lblFontName";
-        this.lblFontName.Size = new System.Drawing.Size(106, 24);
+        this.lblFontName.Size = new System.Drawing.Size(72, 17);
         this.lblFontName.TabIndex = 2;
         this.lblFontName.Text = "Font name:";
         // 
         // tbTtfPath
         // 
-        this.tbTtfPath.Location = new System.Drawing.Point(9, 72);
-        this.tbTtfPath.Margin = new System.Windows.Forms.Padding(5, 4, 5, 4);
+        this.tbTtfPath.Location = new System.Drawing.Point(6, 51);
         this.tbTtfPath.Name = "tbTtfPath";
-        this.tbTtfPath.Size = new System.Drawing.Size(485, 30);
+        this.tbTtfPath.Size = new System.Drawing.Size(310, 23);
         this.tbTtfPath.TabIndex = 1;
         this.tbTtfPath.TextChanged += new System.EventHandler(this.fontPropertiesChanged);
+        this.tbTtfPath.TextChanged += new System.EventHandler(this.inputFilePathsChanged);
         // 
         // lblTtfPath
         // 
         this.lblTtfPath.AutoSize = true;
-        this.lblTtfPath.Location = new System.Drawing.Point(9, 44);
-        this.lblTtfPath.Margin = new System.Windows.Forms.Padding(5, 0, 5, 0);
+        this.lblTtfPath.Location = new System.Drawing.Point(6, 31);
         this.lblTtfPath.Name = "lblTtfPath";
-        this.lblTtfPath.Size = new System.Drawing.Size(84, 24);
+        this.lblTtfPath.Size = new System.Drawing.Size(57, 17);
         this.lblTtfPath.TabIndex = 0;
         this.lblTtfPath.Text = "Font file:";
         // 
@@ -558,10 +625,9 @@ partial class FontPropertiesWindow
         // 
         this.lblPreview.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)));
         this.lblPreview.AutoSize = true;
-        this.lblPreview.Location = new System.Drawing.Point(28, 411);
-        this.lblPreview.Margin = new System.Windows.Forms.Padding(5, 0, 5, 0);
+        this.lblPreview.Location = new System.Drawing.Point(18, 291);
         this.lblPreview.Name = "lblPreview";
-        this.lblPreview.Size = new System.Drawing.Size(76, 24);
+        this.lblPreview.Size = new System.Drawing.Size(52, 17);
         this.lblPreview.TabIndex = 2;
         this.lblPreview.Text = "Preview";
         // 
@@ -569,18 +635,16 @@ partial class FontPropertiesWindow
         // 
         this.pbPreview.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)
         | System.Windows.Forms.AnchorStyles.Right)));
-        this.pbPreview.Location = new System.Drawing.Point(19, 439);
-        this.pbPreview.Margin = new System.Windows.Forms.Padding(5, 4, 5, 4);
+        this.pbPreview.Location = new System.Drawing.Point(12, 311);
         this.pbPreview.Name = "pbPreview";
-        this.pbPreview.Size = new System.Drawing.Size(759, 208);
+        this.pbPreview.Size = new System.Drawing.Size(483, 147);
         this.pbPreview.TabIndex = 3;
         this.pbPreview.TabStop = false;
         // 
         // fileToolStripMenuItem
         // 
         this.fileToolStripMenuItem.DropDownItems.AddRange(new System.Windows.Forms.ToolStripItem[] {
-            this.newToolStripMenuItem,
-            this.saveToolStripMenuItem});
+            this.newToolStripMenuItem});
         this.fileToolStripMenuItem.Name = "fileToolStripMenuItem";
         this.fileToolStripMenuItem.Size = new System.Drawing.Size(56, 28);
         this.fileToolStripMenuItem.Text = "File";
@@ -588,16 +652,17 @@ partial class FontPropertiesWindow
         // newToolStripMenuItem
         // 
         this.newToolStripMenuItem.Name = "newToolStripMenuItem";
-        this.newToolStripMenuItem.Size = new System.Drawing.Size(270, 34);
+        this.newToolStripMenuItem.Size = new System.Drawing.Size(102, 22);
         this.newToolStripMenuItem.Text = "New";
         this.newToolStripMenuItem.Click += new System.EventHandler(this.newToolStripMenuItem_Click);
         // 
         // saveToolStripMenuItem
         // 
         this.saveToolStripMenuItem.Name = "saveToolStripMenuItem";
-        this.saveToolStripMenuItem.Size = new System.Drawing.Size(270, 34);
+        this.saveToolStripMenuItem.Size = new System.Drawing.Size(109, 21);
         this.saveToolStripMenuItem.Text = "Save and Close";
         this.saveToolStripMenuItem.Click += new System.EventHandler(this.saveToolStripMenuItem_Click);
+        this.saveToolStripMenuItem.Enabled = false;
         // 
         // menuStrip1
         // 
@@ -606,8 +671,7 @@ partial class FontPropertiesWindow
             this.saveToolStripMenuItem});
         this.menuStrip1.Location = new System.Drawing.Point(0, 0);
         this.menuStrip1.Name = "menuStrip1";
-        this.menuStrip1.Padding = new System.Windows.Forms.Padding(9, 3, 0, 3);
-        this.menuStrip1.Size = new System.Drawing.Size(797, 34);
+        this.menuStrip1.Size = new System.Drawing.Size(507, 25);
         this.menuStrip1.TabIndex = 0;
         this.menuStrip1.Text = "menuStrip1";
         // 
@@ -616,49 +680,18 @@ partial class FontPropertiesWindow
         this.tbPreviewText.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Bottom | System.Windows.Forms.AnchorStyles.Left)
         | System.Windows.Forms.AnchorStyles.Right)));
         this.tbPreviewText.Enabled = false;
-        this.tbPreviewText.Location = new System.Drawing.Point(119, 406);
-        this.tbPreviewText.Margin = new System.Windows.Forms.Padding(5, 4, 5, 4);
+        this.tbPreviewText.Location = new System.Drawing.Point(76, 288);
         this.tbPreviewText.Name = "tbPreviewText";
-        this.tbPreviewText.Size = new System.Drawing.Size(647, 30);
+        this.tbPreviewText.Size = new System.Drawing.Size(413, 23);
         this.tbPreviewText.TabIndex = 4;
         this.tbPreviewText.Text = "the quick brown fox jumps over the lazy dog";
         this.tbPreviewText.TextChanged += new System.EventHandler(this.fontPropertiesChanged);
         // 
-        // tbCharsetPath
-        // 
-        this.tbCharsetPath.Location = new System.Drawing.Point(10, 313);
-        this.tbCharsetPath.Margin = new System.Windows.Forms.Padding(5, 4, 5, 4);
-        this.tbCharsetPath.MaxLength = 256;
-        this.tbCharsetPath.Name = "tbCharsetPath";
-        this.tbCharsetPath.Size = new System.Drawing.Size(485, 30);
-        this.tbCharsetPath.TabIndex = 14;
-        // 
-        // label1
-        // 
-        this.label1.AutoSize = true;
-        this.label1.Location = new System.Drawing.Point(10, 285);
-        this.label1.Margin = new System.Windows.Forms.Padding(5, 0, 5, 0);
-        this.label1.Name = "label1";
-        this.label1.Size = new System.Drawing.Size(124, 24);
-        this.label1.TabIndex = 13;
-        this.label1.Text = "Charset path:";
-        // 
-        // btnChooseCharset
-        // 
-        this.btnChooseCharset.Location = new System.Drawing.Point(144, 285);
-        this.btnChooseCharset.Margin = new System.Windows.Forms.Padding(5, 4, 5, 4);
-        this.btnChooseCharset.Name = "btnChooseCharset";
-        this.btnChooseCharset.Size = new System.Drawing.Size(118, 32);
-        this.btnChooseCharset.TabIndex = 12;
-        this.btnChooseCharset.Text = "Choose";
-        this.btnChooseCharset.UseVisualStyleBackColor = true;
-        this.btnChooseCharset.Click += new System.EventHandler(this.btnChooseCharset_Click);
-        // 
         // FontPropertiesWindow
         // 
-        this.AutoScaleDimensions = new System.Drawing.SizeF(11F, 24F);
+        this.AutoScaleDimensions = new System.Drawing.SizeF(7F, 17F);
         this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-        this.ClientSize = new System.Drawing.Size(797, 663);
+        this.ClientSize = new System.Drawing.Size(507, 470);
         this.Controls.Add(this.tbPreviewText);
         this.Controls.Add(this.pbPreview);
         this.Controls.Add(this.lblPreview);
@@ -666,9 +699,9 @@ partial class FontPropertiesWindow
         this.Controls.Add(this.menuStrip1);
         this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedToolWindow;
         this.MainMenuStrip = this.menuStrip1;
-        this.Margin = new System.Windows.Forms.Padding(5, 4, 5, 4);
         this.Name = "FontPropertiesWindow";
         this.Text = "Font Properties";
+        this.Load += new System.EventHandler(this.FontPropertiesWindow_Load);
         this.gbFontProperties.ResumeLayout(false);
         this.gbFontProperties.PerformLayout();
         ((System.ComponentModel.ISupportInitialize)(this.nudFontSize)).EndInit();
@@ -677,11 +710,6 @@ partial class FontPropertiesWindow
         this.menuStrip1.PerformLayout();
         this.ResumeLayout(false);
         this.PerformLayout();
-
-        this.Load += (s, e) =>
-        {
-            NewFont();
-        };
 
     }
 
@@ -711,5 +739,4 @@ partial class FontPropertiesWindow
     private Button btnChooseCharset;
     private Label label1;
 }
-
 #endregion
