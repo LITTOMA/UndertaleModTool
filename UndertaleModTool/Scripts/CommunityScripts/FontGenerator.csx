@@ -63,7 +63,7 @@ class FontGenerator
         utFont.DisplayName = utData.Strings.MakeString(displayName);
         utFont.ScaleX = 1;
         utFont.ScaleY = 1;
-        utFont.Charset = 1;
+        utFont.Charset = 0;
         utFont.Ascender = 1;
         utFont.AntiAliasing = 1;
         utFont.AscenderOffset = 1;
@@ -99,8 +99,6 @@ class FontGenerator
         var whiteBrush = new SolidBrush(Color.White);
         var blackBrush = new SolidBrush(Color.Black);
 
-        gfx.FillRectangle(blackBrush, new Rectangle(0, 0, textureBmp.Width, textureBmp.Height));
-
         int x = 0, y = 0;
         int maxHeight = 0;
         foreach (char c in chars)
@@ -124,6 +122,7 @@ class FontGenerator
             glyph.SourceY = Convert.ToUInt16(y);
             glyph.SourceWidth = Convert.ToUInt16(charSize.Width);
             glyph.SourceHeight = Convert.ToUInt16(charSize.Height);
+            glyph.Shift = Convert.ToInt16(charSize.Width);
             utFont.Glyphs.Add(glyph);
 
             x += Convert.ToInt32(charSize.Width);
@@ -155,6 +154,8 @@ class FontGenerator
         texturePage.TargetY = 0;
         texturePage.TargetWidth = (ushort)textureBmp.Width;
         texturePage.TargetHeight = (ushort)textureBmp.Height;
+        texturePage.BoundingWidth = (ushort)textureBmp.Width;
+        texturePage.BoundingHeight = (ushort)textureBmp.Height;
 
         utFont.Texture = texturePage;
 
@@ -351,9 +352,12 @@ public partial class FontGeneratorWindow : Form
             var result = MessageBox.Show($"A {utTypeSuffix} {resName} is already exists.\nDo you want to replace it?", "Warning", MessageBoxButtons.YesNo);
             if (result == DialogResult.No)
                 return false;
-            resList.RemoveAt(index);
+            resList[index] = res;
         }
-        resList.Add(res);
+        else
+        {
+            resList.Add(res);
+        }
         return true;
     }
 
